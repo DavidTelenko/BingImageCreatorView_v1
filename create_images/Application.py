@@ -1,4 +1,5 @@
-import contextlib
+from dataclasses import dataclass
+import logging
 import os
 import pathlib
 import uuid
@@ -9,15 +10,34 @@ from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 import qdarktheme
-import numpy as np
 from PIL import Image
 import PIL.ExifTags
 from create_images.Img import Img
 from create_images.LoadingSpinner import LoadingSpinnerWidget
+from create_images.Utils import apply_function_to_files
+from create_images.ErrorDialog import ErrorDialog
 import cv2
 import qimage2ndarray
 
+
 config = dotenv.dotenv_values(".env")
+
+
+@dataclass
+class ImageData:
+    image: QPixmap
+    prompt: str
+    file: str
+
+
+class MyThread(QThread):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def run(self):
+        self.onRun.emit()
+
+    onRun = pyqtSignal()  # Signal to emit when the task is complete
 
 
 class Application(QMainWindow):
@@ -26,20 +46,21 @@ class Application(QMainWindow):
 
         self.outDir = pathlib.Path(config["OUTPUT_DIR"])
         self.generator = BingImageCreator.ImageGen(
-            config["TOKEN"],
-            quiet=bool(config["QUIET"]),
+            auth_cookie=config["TOKEN"],
+            quiet=True,
         )
 
         self.images = []
         self.currentImage = 0
         self.historyFile = config["HISTORY_FILE"]
         self.watermarkMask = cv2.imread(
-            "res/bing-mask.png", cv2.IMREAD_GRAYSCALE
+            "res/bing-mask.png",
+            cv2.IMREAD_GRAYSCALE
         )
 
         self.setStyleSheet(qdarktheme.load_stylesheet("dark"))
         self.setWindowTitle("Bing Image Creator")
-        self.setMinimumSize(500, 500)
+        self.setMinimumSize(800, 800)
 
         self.loadingSpinner = LoadingSpinnerWidget(self)
         self.loadingSpinner.setRoundingPercent(1.0)
@@ -52,15 +73,16 @@ class Application(QMainWindow):
         self.loadingSpinner.setRevolutionsPerSecond(1.5)
         self.loadingSpinner.setColor(Qt.white)
 
-        self.worker = QThread()
+        self.worker = MyThread(self)
         self.worker.started.connect(self.loadingSpinner.start)
         self.worker.finished.connect(self.loadingSpinner.stop)
-        self.worker.run = self.runPrompt
+        self.worker.onRun.connect(self.runPrompt)
 
         self.imageLabel = Img(self)
         self.imageLabel.setText("No images generated")
         self.imageLabel.setScaledContents(True)
         self.imageLabel.setAlignment(Qt.AlignCenter)
+        self.imageLabel.notifyPromptChange.connect(self.changeMetadata)
 
         search = QHBoxLayout()
         main = QVBoxLayout()
@@ -97,11 +119,6 @@ class Application(QMainWindow):
 
         self.loadState()
 
-        # self.images.append(
-        #     QPixmap("output/2c6178e3-3881-4d53-867f-dce32cc21404.jpg")
-        # )
-        # self.setImage(0)
-
     def closeEvent(self, _: QCloseEvent) -> None:
         self.saveState()
 
@@ -113,42 +130,66 @@ class Application(QMainWindow):
         self.prepend.setText(config["PREPEND"])
         self.prompt.setText(config["PROMPT"])
 
+        def loadImage(i):
+            try:
+                self.images.append(
+                    ImageData(QPixmap(i), self.getMetadata(i), i)
+                )
+            except Exception as e:
+                logging.debug(f"Error while loading file \"{i}\":\n {e}")
+
+        apply_function_to_files(loadImage, self.outDir.as_posix())
+        self.setImage(0)
+        self.setFocus()
+
     def runPrompt(self):
         if not self.prompt.text():
             return
-        self.resetImages()
+
         prompt = self.prepend.text() + " " + self.prompt.text()
-        images = self.generator.get_images(prompt)
+        self.imageLabel.clear()
+        self.imageLabel.setText("Generating...")
 
-        with contextlib.suppress(FileExistsError):
+        if not os.path.exists(self.outDir) or not os.path.isdir(self.outDir):
             os.mkdir(self.outDir)
-        # try:
-        with open(self.historyFile, "a") as history:
-            for link in images:
-                with self.generator.session.get(link, stream=True) as res:
-                    res.raise_for_status()
+        try:
+            images = self.generator.get_images(prompt)
 
-                    pixmap = QPixmap()
-                    pixmap.loadFromData(res.content, "JPEG")
+            with open(self.historyFile, "a") as history:
+                for link in images:
+                    with self.generator.session.get(link, stream=True) as res:
+                        # requesting image
+                        res.raise_for_status()
 
-                    pixmap = self.inpaintWatermark(pixmap)
+                        # loading image from response
+                        pixmap = QPixmap()
+                        pixmap.loadFromData(res.content, "JPEG")
 
-                    outFilePath = self.getUniquePath()
-                    pixmap.save(outFilePath.as_posix(), "JPEG")
-                    history.write(f"{prompt} :: [{outFilePath}]\n")
+                        # removing watermark
+                        pixmap = self.inpaintWatermark(pixmap)
 
-                    # self.includeMetadata(outFilePath, prompt)
+                        # saving image file
+                        outFilePath = self.getUniquePath()
+                        pixmap.save(outFilePath.as_posix(), "JPEG")
 
-                    self.images.append(pixmap)
-        self.setImage(0)
-        self.setFocus()
-        # except Exception as _:
-        #     QMessageBox.critical(
-        #         self,
-        #         "Something went wrong",
-        #         "Do not panic and try different promt)"
-        #     )
-        #     self.resetImages()
+                        # saving prompt to history
+                        history.write(f"{prompt} :: [{outFilePath}]\n")
+
+                        # including prompt to exif comment metadata tag
+                        self.includeMetadata(outFilePath, prompt)
+
+                        # adding image to all current images
+                        self.images.append(
+                            ImageData(pixmap, prompt, outFilePath.as_posix())
+                        )
+            self.setImage(len(images) - 1)
+            self.setFocus()
+        except Exception as e:
+            self.openErrorDialog(e)
+
+    def openErrorDialog(self, e):
+        dialog = ErrorDialog(e, "Do not panic and try different prompt", self)
+        dialog.exec_()
 
     def getUniquePath(self):
         return self.outDir.absolute() / f"{uuid.uuid4()}.jpg"
@@ -165,21 +206,31 @@ class Application(QMainWindow):
             )
         )
 
+    def changeMetadata(self, prompt):
+        if not prompt:
+            return
+
+        currentFile = self.images[self.currentImage].file
+
+        with Image.open(currentFile) as image:
+            metadata = image.getexif()
+            metadata[PIL.ExifTags.Base.XPComment] = prompt
+            image.save(currentFile, exif=metadata)
+
     def includeMetadata(self, outFilePath, prompt):
         with Image.open(outFilePath) as image:
             metadata = image.getexif()
             metadata[PIL.ExifTags.Base.XPComment] = prompt
             image.save(outFilePath, exif=metadata)
 
-    def resetImages(self):
-        self.images.clear()
-        self.currentImage = 0
-        self.imageLabel.clear()
-        self.imageLabel.setText("No images generated")
+    def getMetadata(self, imgPath):
+        with Image.open(imgPath) as image:
+            return image.getexif().get(PIL.ExifTags.Base.XPComment)
 
     def setImage(self, i):
-        self.currentImage = np.clip(i, 0, len(self.images) - 1)
-        self.imageLabel.setPixmap(self.images[self.currentImage])
+        self.currentImage = i % len(self.images)
+        self.imageLabel.setPixmap(self.images[self.currentImage].image)
+        self.imageLabel.setPrompt(self.images[self.currentImage].prompt)
 
     def mousePressEvent(self, e: QMouseEvent) -> None:
         super().mousePressEvent(e)
