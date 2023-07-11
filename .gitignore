@@ -160,5 +160,9 @@ cython_debug/
 #.idea/
 
 output
+upscaled
 vault
 .vscode
+res/models/RealESRGAN_x4.pth
+res/models/edsr/pytorch_model_4x.pt
+res/models/edsr/config.json

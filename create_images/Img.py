@@ -1,7 +1,10 @@
+from PyQt5 import QtCore, QtGui
+from PyQt5.QtCore import QEvent, QObject
 from PyQt5.QtMultimedia import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
+import os
 
 
 class Img(QLabel):
@@ -10,12 +13,20 @@ class Img(QLabel):
 
         self.menu = QMenu(self)
         self.prompt = ""
+        self.filePath = None
+        self.initialPixmap = None
 
         self.saveAction = QAction("Save", self)
         self.saveAction.triggered.connect(self.saveImage)
 
         self.copyAction = QAction("Copy", self)
         self.copyAction.triggered.connect(self.copyImage)
+
+        self.deleteAction = QAction("Delete", self)
+        self.deleteAction.triggered.connect(self.deleteImage)
+
+        self.upscaleAction = QAction("Upscale", self)
+        self.upscaleAction.triggered.connect(self.upscaleImage)
 
         self.copyPromptAction = QAction("Copy Prompt", self)
         self.copyPromptAction.triggered.connect(self.copyPrompt)
@@ -25,7 +36,24 @@ class Img(QLabel):
 
         self.menu.addAction(self.saveAction)
         self.menu.addAction(self.copyAction)
+        self.menu.addAction(self.upscaleAction)
+        self.menu.addAction(self.deleteAction)
         self.menu.addAction(self.editPromptAction)
+
+    notifyPromptChange = pyqtSignal(str)
+    upscaleRequest = pyqtSignal()
+    imageDeleted = pyqtSignal()
+
+    def changeEvent(self, e: QEvent) -> None:
+        if e.type() == QEvent.EnabledChange:
+            if not self.isEnabled():
+                blurEffect = QGraphicsBlurEffect(self)
+                blurEffect.setBlurRadius(10)
+                blurEffect.setBlurHints(QGraphicsBlurEffect.QualityHint)
+                self.setGraphicsEffect(blurEffect)
+            else:
+                self.setGraphicsEffect(None)
+        return super().changeEvent(e)
 
     def setPrompt(self, prompt):
         self.prompt = prompt
@@ -34,7 +62,8 @@ class Img(QLabel):
         else:
             self.menu.removeAction(self.copyPromptAction)
 
-    notifyPromptChange = pyqtSignal(str)
+    def setFilePath(self, path):
+        self.filePath = path
 
     def copyPrompt(self):
         clipboard = QApplication.clipboard()
@@ -61,6 +90,7 @@ class Img(QLabel):
 
         promptEdit.textChanged.connect(adjustSize)
         promptEdit.setText(self.prompt)
+        promptEdit.setMinimumWidth(300)
 
         okButton = QPushButton("Ok", dialog)
         okButton.setMaximumWidth(100)
@@ -89,22 +119,30 @@ class Img(QLabel):
         dialog.setFixedHeight(80)
         dialog.exec_()
 
-    def paintEvent(self, e):
-        if not self.pixmap():
-            super().paintEvent(e)
+    def setPixmap(self, pm: QPixmap) -> None:
+        self.updateMargins()
+        super().setPixmap(pm)
+
+    def resizeEvent(self, a0: QResizeEvent) -> None:
+        self.updateMargins()
+        super().resizeEvent(a0)
+
+    def updateMargins(self):
+        if self.pixmap() is None:
             return
 
-        painter = QPainter(self)
-        windowRect = e.rect()
+        pw, ph = self.pixmap().width(), self.pixmap().height()
+        w, h = self.width(), self.height()
 
-        pixmap = self.pixmap().scaled(
-            windowRect.width(), windowRect.height(),
-            Qt.KeepAspectRatio, Qt.SmoothTransformation
-        )
+        if pw <= 0 or ph <= 0 or w <= 0 or h <= 0:
+            return
 
-        rect = pixmap.rect()
-        rect.moveCenter(windowRect.center())
-        painter.drawPixmap(rect, pixmap)
+        if w * ph > h * pw:
+            m = int((w - (pw * h / ph)) / 2)
+            self.setContentsMargins(m, 0, m, 0)
+        else:
+            m = int((h - (ph * w / pw)) / 2)
+            self.setContentsMargins(0, m, 0, m)
 
     def contextMenuEvent(self, event):
         self.menu.exec_(self.mapToGlobal(event.pos()))
@@ -115,6 +153,14 @@ class Img(QLabel):
         )
         if filePath:
             self.pixmap().save(filePath)
+
+    def deleteImage(self):
+        if self.filePath:
+            os.remove(self.filePath)
+            self.imageDeleted.emit()
+
+    def upscaleImage(self):
+        self.upscaleRequest.emit()
 
     def copyImage(self):
         clipboard = QApplication.clipboard()

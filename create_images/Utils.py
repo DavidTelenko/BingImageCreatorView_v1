@@ -1,5 +1,27 @@
 import os
 import logging
+import time
+
+
+def formatTime(millis):
+    seconds = millis // 1000
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours == 0:
+        return f"{minutes:02d}:{seconds:02d}"
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+class TimeThis:
+    def __init__(self, getter):
+        self.startTime = 0
+        self.getter = getter
+
+    def __enter__(self):
+        self.startTime = time.time_ns()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.getter(time.time_ns() - self.startTime)
 
 
 def apply_function_to_files(function, input_directory, output_directory=None):

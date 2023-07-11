@@ -2,7 +2,7 @@ import uuid
 import cv2
 import sys
 import os
-from create_images.Utils import apply_function_to_files
+from Utils import apply_function_to_files
 
 
 def make_inpaint_all(mask):

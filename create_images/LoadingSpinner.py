@@ -7,8 +7,8 @@ import numpy as np
 
 
 class LoadingSpinnerWidget(QWidget):
-    def __init__(self, parent=None, centerOnParent=True, disableParentWhenSpinning=True):
-        super().__init__(parent)
+    def __init__(self, parent=None, centerOnParent=True, disableParentWhenSpinning=True, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
         self._centerOnParent = centerOnParent
         self._disableParentWhenSpinning = disableParentWhenSpinning
         self._color = Qt.black
@@ -111,7 +111,8 @@ class LoadingSpinnerWidget(QWidget):
         )
 
     def updatePosition(self):
-        if self.parentWidget() and self._centerOnParent:
+        if self.parentWidget() and self._centerOnParent and not self.isModal():
+            pass
             self.move(
                 round(self.parentWidget().width() / 2 - self.width() / 2),
                 round(self.parentWidget().height() / 2 - self.height() / 2)
