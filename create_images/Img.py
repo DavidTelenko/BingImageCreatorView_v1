@@ -1,10 +1,17 @@
-from PyQt5 import QtCore, QtGui
-from PyQt5.QtCore import QEvent, QObject
+from PyQt5 import QtGui
 from PyQt5.QtMultimedia import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 import os
+
+
+class DummyStyle(QProxyStyle):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def generatedIconPixmap(self, iconMode, pixmap, opt) -> QPixmap:
+        return pixmap
 
 
 class Img(QLabel):
@@ -39,6 +46,8 @@ class Img(QLabel):
         self.menu.addAction(self.upscaleAction)
         self.menu.addAction(self.deleteAction)
         self.menu.addAction(self.editPromptAction)
+
+        self.setStyle(DummyStyle())
 
     notifyPromptChange = pyqtSignal(str)
     upscaleRequest = pyqtSignal()

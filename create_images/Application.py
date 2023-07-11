@@ -58,9 +58,6 @@ class ImageGenerator(QObject):
     @pyqtSlot(str)
     def generateImages(self, prompt):
         self.started.emit()
-        # time.sleep(10)
-        # self.finished.emit()
-        # return
         try:
             imagesLinks = self.generator.get_images(prompt)
             generatedImages = []
@@ -250,8 +247,6 @@ class Application(QMainWindow):
         self.acceptButton.pressed.connect(self.generateImages)
         self.prompt.returnPressed.connect(self.generateImages)
 
-        self.loadState()
-
         self.loadingSpinner = LoadingSpinnerWidget(
             self, True, True, Qt.Dialog | Qt.FramelessWindowHint
         )
@@ -273,12 +268,15 @@ class Application(QMainWindow):
         self.imageUpscaler.started.connect(self.loadingSpinner.start)
         self.imageUpscaler.finished.connect(self.loadingSpinner.stop)
 
+        self.loadState()
+
     @pyqtSlot()
     def generateImages(self):
         if not self.prompt.text():
             return
 
         prompt = self.prepend.text() + " " + self.prompt.text()
+
         try:
             QMetaObject.invokeMethod(
                 self.imageGenerator,
@@ -291,6 +289,8 @@ class Application(QMainWindow):
                 e, "Do not panic and try different prompt", self
             )
             dialog.exec_()
+
+        self.setFocus()
 
     @pyqtSlot()
     def upscaleCurrentImage(self):
@@ -325,6 +325,7 @@ class Application(QMainWindow):
                 logging.debug(f"Error while loading file \"{i}\":\n {e}")
 
         apply_function_to_files(loadImage, self.outDir.as_posix())
+        self.images.sort(key=lambda x: -os.path.getctime(x.file))
         self.setImage(0)
         self.setFocus()
 
@@ -351,8 +352,8 @@ class Application(QMainWindow):
 
     @pyqtSlot(object)
     def receiveGeneratedImages(self, images):
-        self.images += images
-        self.setImage(-len(images))
+        self.images = images + self.images
+        self.setImage(0)
 
     def setImage(self, i):
         self.currentImage = i % len(self.images)
