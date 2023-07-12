@@ -7,8 +7,8 @@ import numpy as np
 
 
 class LoadingSpinnerWidget(QWidget):
-    def __init__(self, parent=None, centerOnParent=True, disableParentWhenSpinning=True, *args, **kwargs):
-        super().__init__(parent, *args, **kwargs)
+    def __init__(self, centerOnParent=True, disableParentWhenSpinning=True, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self._centerOnParent = centerOnParent
         self._disableParentWhenSpinning = disableParentWhenSpinning
         self._color = Qt.black
@@ -34,7 +34,7 @@ class LoadingSpinnerWidget(QWidget):
         self.hide()
 
     def paintEvent(self, event):
-        self.updatePosition()
+        # self.updatePosition()
         painter = QPainter(self)
         painter.fillRect(self.rect(), Qt.transparent)
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -111,12 +111,12 @@ class LoadingSpinnerWidget(QWidget):
         )
 
     def updatePosition(self):
-        if self.parentWidget() and self._centerOnParent and not self.isModal():
-            pass
-            self.move(
-                round(self.parentWidget().width() / 2 - self.width() / 2),
-                round(self.parentWidget().height() / 2 - self.height() / 2)
-            )
+        if self.parentWidget() and self._centerOnParent:
+            cX = self.parentWidget().geometry().center().x()
+            cY = self.parentWidget().geometry().center().y()
+            w = self.size().width()
+            h = self.size().height()
+            self.move(cX - w // 2, cY - h // 2)
 
     def lineCountDistanceFromPrimary(self, current):
         distance = self._currentCounter - current

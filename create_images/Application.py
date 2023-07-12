@@ -122,7 +122,7 @@ class Application(QMainWindow):
         self.prompt.returnPressed.connect(self.generateImages)
 
         self.loadingSpinner = LoadingSpinnerWidget(
-            self, True, True, Qt.Dialog | Qt.FramelessWindowHint
+            True, True, self, Qt.Dialog | Qt.FramelessWindowHint
         )
         self.loadingSpinner.setAttribute(Qt.WA_TranslucentBackground)
         self.loadingSpinner.setWindowModality(Qt.ApplicationModal)
@@ -146,10 +146,12 @@ class Application(QMainWindow):
 
     @pyqtSlot()
     def generateImages(self):
+        self.setFocus()
+
         if not self.prompt.text():
             return
 
-        prompt = self.prepend.text() + " " + self.prompt.text()
+        prompt = self.prepend.text().strip() + " " + self.prompt.text().strip()
 
         try:
             QMetaObject.invokeMethod(
@@ -225,7 +227,7 @@ class Application(QMainWindow):
 
     def closeEvent(self, e: QCloseEvent):
         self.saveState()
-        super().closeEvent(e)
+        e.accept()
 
     def saveState(self):
         dotenv.set_key(".env", "PREPEND", self.prepend.text())

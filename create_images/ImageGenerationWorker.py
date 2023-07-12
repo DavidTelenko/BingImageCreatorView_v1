@@ -8,6 +8,8 @@ from PIL import Image
 import PIL.ExifTags
 import cv2
 import qimage2ndarray
+from create_images.ImageData import ImageData
+import time
 
 
 class ImageGenerationWorker(QObject):
