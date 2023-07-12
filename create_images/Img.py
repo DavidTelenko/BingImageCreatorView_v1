@@ -14,6 +14,67 @@ class DummyStyle(QProxyStyle):
         return pixmap
 
 
+class PromptEditor(QDialog):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.setWindowTitle(self.tr("Edit Prompt"))
+
+        layout = QVBoxLayout()
+        buttons = QHBoxLayout()
+
+        minWidth = 300
+        widthOffset = 20
+        buttonMinWidth = 100
+        height = 80
+
+        self.promptEdit = QLineEdit(self)
+        self.promptEdit.setPlaceholderText(self.tr("Prompt"))
+
+        fm = QFontMetrics(self.promptEdit.font())
+
+        def adjustSize():
+            self.promptEdit.setMinimumWidth(
+                max(fm.width(self.promptEdit.text()) + widthOffset, minWidth)
+            )
+            self.adjustSize()
+
+        self.promptEdit.textChanged.connect(adjustSize)
+        self.promptEdit.setMinimumWidth(minWidth)
+
+        okButton = QPushButton(self.tr("Ok"), self)
+        okButton.setMaximumWidth(buttonMinWidth)
+        okButton.setFocusPolicy(Qt.NoFocus)
+        okButton.pressed.connect(self.accept)
+
+        cancelButton = QPushButton(self.tr("Cancel"), self)
+        cancelButton.setMaximumWidth(buttonMinWidth)
+        cancelButton.setFocusPolicy(Qt.NoFocus)
+        cancelButton.pressed.connect(self.reject)
+
+        def savePrompt():
+            self.notifyPromptChange.emit(self.promptEdit.text())
+
+        self.accepted.connect(savePrompt)
+        self.promptEdit.returnPressed.connect(self.accept)
+
+        buttons.addStretch()
+        buttons.addWidget(okButton)
+        buttons.addWidget(cancelButton)
+
+        layout.addWidget(self.promptEdit)
+        layout.addLayout(buttons)
+
+        self.setLayout(layout)
+        self.setFixedHeight(height)
+
+    notifyPromptChange = pyqtSignal(str)
+
+    def exec_(self, prompt):
+        self.promptEdit.setText(prompt)
+        return super().exec_()
+
+
 class Img(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -22,50 +83,65 @@ class Img(QLabel):
         self.prompt = ""
         self.filePath = None
         self.initialPixmap = None
+        self._index = None
 
-        self.saveAction = QAction("Save", self)
+        saveIcon = QIcon("res/icons/save.svg")
+        copyIcon = QIcon("res/icons/copy.svg")
+        upscaleIcon = QIcon("res/icons/upscale.svg")
+        deleteIcon = QIcon("res/icons/delete.svg")
+        backupIcon = QIcon("res/icons/backup.svg")
+        editIcon = QIcon("res/icons/edit.svg")
+
+        self.saveAction = QAction(saveIcon, self.tr("Save"), self)
         self.saveAction.triggered.connect(self.saveImage)
 
-        self.copyAction = QAction("Copy", self)
+        self.copyAction = QAction(copyIcon, self.tr("Copy"), self)
         self.copyAction.triggered.connect(self.copyImage)
 
-        self.deleteAction = QAction("Delete", self)
-        self.deleteAction.triggered.connect(self.deleteImage)
-
-        self.upscaleAction = QAction("Upscale", self)
+        self.upscaleAction = QAction(upscaleIcon, self.tr("Upscale"), self)
         self.upscaleAction.triggered.connect(self.upscaleImage)
 
-        self.copyPromptAction = QAction("Copy Prompt", self)
+        self.deleteAction = QAction(deleteIcon, self.tr("Delete"), self)
+        self.deleteAction.triggered.connect(self.deleteImage)
+
+        self.backupAction = QAction(backupIcon, self.tr("Backup"), self)
+        self.backupAction.triggered.connect(self.backupRequest.emit)
+
+        self.copyPromptAction = QAction(copyIcon, self.tr("Copy Prompt"), self)
         self.copyPromptAction.triggered.connect(self.copyPrompt)
 
-        self.editPromptAction = QAction("Edit Prompt", self)
-        self.editPromptAction.triggered.connect(self.editPrompt)
+        self.editPromptAction = QAction(editIcon, self.tr("Edit Prompt"), self)
+        self.editPromptAction.triggered.connect(self.openPromptEditor)
+
+        self.promptEdit = PromptEditor(self)
+        self.promptEdit.notifyPromptChange.connect(self.editPrompt)
 
         self.menu.addAction(self.saveAction)
         self.menu.addAction(self.copyAction)
         self.menu.addAction(self.upscaleAction)
         self.menu.addAction(self.deleteAction)
+        self.menu.addAction(self.backupAction)
+        self.menu.addSeparator()
         self.menu.addAction(self.editPromptAction)
 
         self.setStyle(DummyStyle())
 
-    notifyPromptChange = pyqtSignal(str)
+    promptChangeRequest = pyqtSignal(str)
     upscaleRequest = pyqtSignal()
-    imageDeleted = pyqtSignal()
+    backupRequest = pyqtSignal()
+    deleteRequest = pyqtSignal()
+    saveRequest = pyqtSignal()
 
-    def changeEvent(self, e: QEvent) -> None:
-        if e.type() == QEvent.EnabledChange:
-            if not self.isEnabled():
-                blurEffect = QGraphicsBlurEffect(self)
-                blurEffect.setBlurRadius(10)
-                blurEffect.setBlurHints(QGraphicsBlurEffect.QualityHint)
-                self.setGraphicsEffect(blurEffect)
-            else:
-                self.setGraphicsEffect(None)
-        return super().changeEvent(e)
+    def openPromptEditor(self):
+        self.promptEdit.exec_(self.prompt)
+
+    def editPrompt(self, prompt):
+        self.setPrompt(prompt)
+        self.promptChangeRequest.emit(prompt)
 
     def setPrompt(self, prompt):
         self.prompt = prompt
+
         if self.prompt:
             self.menu.addAction(self.copyPromptAction)
         else:
@@ -74,67 +150,9 @@ class Img(QLabel):
     def setFilePath(self, path):
         self.filePath = path
 
-    def copyPrompt(self):
-        clipboard = QApplication.clipboard()
-        if self.prompt:
-            clipboard.setText(self.prompt)
-
-    def editPrompt(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Edit Prompt")
-
-        layout = QVBoxLayout()
-        buttons = QHBoxLayout()
-
-        promptEdit = QLineEdit(self)
-        promptEdit.setPlaceholderText("Prompt")
-
-        def adjustSize():
-            text = promptEdit.text()
-            font = promptEdit.font()
-            fm = QFontMetrics(font)
-            width = fm.width(text)
-            promptEdit.setMinimumWidth(max(width + 20, 300))
-            dialog.adjustSize()
-
-        promptEdit.textChanged.connect(adjustSize)
-        promptEdit.setText(self.prompt)
-        promptEdit.setMinimumWidth(300)
-
-        okButton = QPushButton("Ok", dialog)
-        okButton.setMaximumWidth(100)
-        okButton.setFocusPolicy(Qt.NoFocus)
-        okButton.pressed.connect(dialog.accept)
-
-        cancelButton = QPushButton("Cancel", dialog)
-        cancelButton.setMaximumWidth(100)
-        cancelButton.setFocusPolicy(Qt.NoFocus)
-        cancelButton.pressed.connect(dialog.reject)
-
-        def savePrompt():
-            self.setPrompt(promptEdit.text())
-            self.notifyPromptChange.emit(self.prompt)
-
-        dialog.accepted.connect(savePrompt)
-
-        buttons.addStretch()
-        buttons.addWidget(okButton)
-        buttons.addWidget(cancelButton)
-
-        layout.addWidget(promptEdit)
-        layout.addLayout(buttons)
-
-        dialog.setLayout(layout)
-        dialog.setFixedHeight(80)
-        dialog.exec_()
-
     def setPixmap(self, pm: QPixmap) -> None:
         self.updateMargins()
         super().setPixmap(pm)
-
-    def resizeEvent(self, a0: QResizeEvent) -> None:
-        self.updateMargins()
-        super().resizeEvent(a0)
 
     def updateMargins(self):
         if self.pixmap() is None:
@@ -153,24 +171,37 @@ class Img(QLabel):
             m = int((h - (ph * w / pw)) / 2)
             self.setContentsMargins(0, m, 0, m)
 
+    def changeEvent(self, e: QEvent) -> None:
+        if e.type() == QEvent.EnabledChange:
+            if not self.isEnabled():
+                blurEffect = QGraphicsBlurEffect(self)
+                blurEffect.setBlurRadius(10)
+                blurEffect.setBlurHints(QGraphicsBlurEffect.QualityHint)
+                self.setGraphicsEffect(blurEffect)
+            else:
+                self.setGraphicsEffect(None)
+        return super().changeEvent(e)
+
+    def resizeEvent(self, e: QResizeEvent) -> None:
+        self.updateMargins()
+        super().resizeEvent(e)
+
     def contextMenuEvent(self, event):
         self.menu.exec_(self.mapToGlobal(event.pos()))
 
+    def copyPrompt(self):
+        if self.prompt:
+            QApplication.clipboard().setText(self.prompt)
+
+    def copyImage(self):
+        if not self.pixmap().isNull():
+            QApplication.clipboard().setPixmap(self.pixmap())
+
     def saveImage(self):
-        filePath, _ = QFileDialog.getSaveFileName(
-            self, "Save Image", "", "Image Files (*.png, *.jpg, *.jpeg, *jfif)"
-        )
-        if filePath:
-            self.pixmap().save(filePath)
+        self.saveRequest.emit()
 
     def deleteImage(self):
-        if self.filePath:
-            os.remove(self.filePath)
-            self.imageDeleted.emit()
+        self.deleteRequest.emit()
 
     def upscaleImage(self):
         self.upscaleRequest.emit()
-
-    def copyImage(self):
-        clipboard = QApplication.clipboard()
-        clipboard.setPixmap(self.pixmap())

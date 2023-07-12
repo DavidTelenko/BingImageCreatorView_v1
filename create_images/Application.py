@@ -1,165 +1,27 @@
-from dataclasses import dataclass
 import logging
 import os
 import pathlib
-import time
-from typing import List
-import uuid
 import BingImageCreator
-from PyQt5 import QtGui
 import dotenv
 from PyQt5.QtMultimedia import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 import qdarktheme
-from PIL import Image, ImageQt
+from PIL import Image
 import PIL.ExifTags
-import torch
+from create_images.ImageBackupWorker import ImageBackupWorker
+from create_images.ImageGenerationWorker import ImageGenerationWorker
+from create_images.ImageUpscaleWorker import ImageUpscaleWorker
 from create_images.Img import Img
 from create_images.LoadingSpinner import LoadingSpinnerWidget
 from create_images.Utils import apply_function_to_files
 from create_images.ErrorDialog import ErrorDialog
+from create_images.ImageData import ImageData
 import cv2
-import qimage2ndarray
-from RealESRGAN import RealESRGAN
+
 
 config = dotenv.dotenv_values(".env")
-
-
-@dataclass
-class ImageData:
-    image: QPixmap
-    prompt: str
-    file: str
-
-
-class ImageGenerator(QObject):
-    def __init__(
-        self,
-        outDir,
-        historyFile,
-        generator,
-        watermarkMask,
-        *args,
-        **kwargs
-    ):
-        super().__init__(*args, **kwargs)
-
-        self.watermarkMask = watermarkMask
-        self.historyFile = historyFile
-        self.outDir = outDir
-        self.generator = generator
-
-    generated = pyqtSignal(object)
-    started = pyqtSignal()
-    finished = pyqtSignal()
-
-    @pyqtSlot(str)
-    def generateImages(self, prompt):
-        self.started.emit()
-        try:
-            imagesLinks = self.generator.get_images(prompt)
-            generatedImages = []
-
-            if not os.path.exists(self.outDir) or not os.path.isdir(self.outDir):
-                os.mkdir(self.outDir)
-
-            with open(self.historyFile, "a") as history:
-                for link in imagesLinks:
-                    with self.generator.session.get(link, stream=True) as res:
-                        # requesting image
-                        res.raise_for_status()
-
-                        # loading image from response
-                        pixmap = QPixmap()
-                        pixmap.loadFromData(res.content, "JPEG")
-
-                        # removing watermark
-                        pixmap = self.inpaintWatermark(pixmap)
-
-                        # saving image file
-                        outFilePath = self.getUniquePath()
-                        pixmap.save(outFilePath.as_posix(), "JPEG")
-
-                        # saving prompt to history
-                        history.write(f"{prompt} :: [{outFilePath}]\n")
-
-                        # including prompt to exif comment metadata tag
-                        self.includeMetadata(outFilePath, prompt)
-
-                        # adding image to generated images
-                        generatedImages.append(
-                            ImageData(pixmap, prompt, outFilePath.as_posix())
-                        )
-            self.generated.emit(generatedImages)
-        except Exception as e:
-            raise e
-        finally:
-            self.finished.emit()
-
-    def getUniquePath(self):
-        return self.outDir.absolute() / f"{uuid.uuid4()}.jpg"
-
-    def includeMetadata(self, outFilePath, prompt):
-        with Image.open(outFilePath) as image:
-            metadata = image.getexif()
-            metadata[PIL.ExifTags.Base.XPComment] = prompt
-            image.save(outFilePath, exif=metadata)
-
-    def inpaintWatermark(self, pixmap: QPixmap) -> QPixmap:
-        return QPixmap.fromImage(
-            qimage2ndarray.array2qimage(
-                cv2.inpaint(
-                    qimage2ndarray.rgb_view(pixmap.toImage()),
-                    self.watermarkMask,
-                    3,
-                    cv2.INPAINT_TELEA
-                )
-            )
-        )
-
-
-class ImageUpscaler(QObject):
-    def __init__(
-        self,
-        outDir,
-        scale,
-        model,
-        *args,
-        **kwargs
-    ):
-        super().__init__(*args, **kwargs)
-
-        self.outDir = outDir
-        self.deviseType = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-        logging.info(f"Selected device type: {self.deviseType}")
-
-        self.model = RealESRGAN(
-            device=torch.device(self.deviseType),
-            scale=scale
-        )
-        self.model.load_weights(
-            model_path=model,
-            download=True
-        )
-
-    upscaled = pyqtSignal(object)
-    started = pyqtSignal()
-    finished = pyqtSignal()
-
-    @pyqtSlot(QPixmap)
-    def upscaleImage(self, image: QPixmap):
-        self.started.emit()
-        try:
-            lrImage = ImageQt.fromqpixmap(image).convert("RGB")
-            res = self.model.predict(lrImage)
-            self.upscaled.emit(res)
-        except Exception as e:
-            raise e
-        finally:
-            self.finished.emit()
 
 
 class Application(QMainWindow):
@@ -173,10 +35,10 @@ class Application(QMainWindow):
         self.currentImage = 0
 
         self.setStyleSheet(qdarktheme.load_stylesheet("dark"))
-        self.setWindowTitle("Bing Image Creator")
+        self.setWindowTitle(self.tr("Bing Image Creator"))
         self.setMinimumSize(800, 800)
 
-        self.imageGenerator = ImageGenerator(
+        self.imageGenerationWorker = ImageGenerationWorker(
             outDir=self.outDir,
             historyFile=config["HISTORY_FILE"],
             generator=BingImageCreator.ImageGen(
@@ -188,32 +50,44 @@ class Application(QMainWindow):
                 cv2.IMREAD_GRAYSCALE
             )
         )
-        self.imageGenerator.generated.connect(self.receiveGeneratedImages)
+        self.imageGenerationWorker.generated.connect(
+            self.receiveGeneratedImages
+        )
 
-        self.imageGeneratorThread = QThread(self)
-        self.imageGeneratorThread.setObjectName("imageGeneratorThread")
-        self.imageGenerator.moveToThread(self.imageGeneratorThread)
-        self.imageGeneratorThread.start()
+        self.imageGenerationThread = QThread(self)
+        self.imageGenerationThread.setObjectName("imageGenerationThread")
+        self.imageGenerationWorker.moveToThread(self.imageGenerationThread)
+        self.imageGenerationThread.start()
 
-        self.imageUpscaler = ImageUpscaler(
+        self.imageUpscaleWorker = ImageUpscaleWorker(
             outDir=self.upscaledDir,
             scale=int(config["UPSCALER_SCALE"]),
             model=config["UPSCALE_MODEL"]
         )
-        self.imageUpscaler.upscaled.connect(self.onUpscaled)
+        self.imageUpscaleWorker.upscaled.connect(self.onUpscaled)
 
-        self.imageUpscalerThread = QThread(self)
-        self.imageUpscalerThread.setObjectName("imageUpscalerThread")
-        self.imageUpscaler.moveToThread(self.imageUpscalerThread)
-        self.imageUpscalerThread.start()
+        self.imageUpscaleThread = QThread(self)
+        self.imageUpscaleThread.setObjectName("imageUpscaleThread")
+        self.imageUpscaleWorker.moveToThread(self.imageUpscaleThread)
+        self.imageUpscaleThread.start()
+
+        self.imageBackupWorker = ImageBackupWorker()
+        self.imageBackupThread = QThread(self)
+        self.imageBackupThread.setObjectName("imageBackupThread")
+        self.imageBackupWorker.moveToThread(self.imageBackupThread)
+        self.imageBackupThread.start()
 
         self.imageLabel = Img(self)
-        self.imageLabel.setText("No images generated")
+        self.imageLabel.setText(self.tr("No images generated"))
         self.imageLabel.setScaledContents(True)
         self.imageLabel.setAlignment(Qt.AlignCenter)
-        self.imageLabel.notifyPromptChange.connect(self.changeMetadata)
-        self.imageLabel.imageDeleted.connect(self.deleteImage)
+        self.imageLabel.promptChangeRequest.connect(
+            self.changeCurrentImageMetadata
+        )
+        self.imageLabel.deleteRequest.connect(self.deleteCurrentImage)
+        self.imageLabel.saveRequest.connect(self.saveCurrentImage)
         self.imageLabel.upscaleRequest.connect(self.upscaleCurrentImage)
+        self.imageLabel.backupRequest.connect(self.backupCurrentImage)
 
         search = QHBoxLayout()
         self.main = QVBoxLayout()
@@ -222,12 +96,12 @@ class Application(QMainWindow):
         self.prompt = QLineEdit(self)
         self.append = QLineEdit(self)
         self.acceptButton = QPushButton(self)
-        self.acceptButton.setText("Generate")
+        self.acceptButton.setText(self.tr("Generate"))
 
-        self.prepend.setPlaceholderText("Prepend")
+        self.prepend.setPlaceholderText(self.tr("Prepend"))
         self.prepend.setMaximumWidth(200)
-        self.prompt.setPlaceholderText("Prompt")
-        self.append.setPlaceholderText("Append")
+        self.prompt.setPlaceholderText(self.tr("Prompt"))
+        self.append.setPlaceholderText(self.tr("Append"))
 
         search.addWidget(self.prepend)
         search.addWidget(self.prompt)
@@ -262,11 +136,11 @@ class Application(QMainWindow):
         self.loadingSpinner.setRevolutionsPerSecond(1.5)
         self.loadingSpinner.setColor(Qt.white)
 
-        self.imageGenerator.started.connect(self.loadingSpinner.start)
-        self.imageGenerator.finished.connect(self.loadingSpinner.stop)
+        self.imageGenerationWorker.started.connect(self.loadingSpinner.start)
+        self.imageGenerationWorker.finished.connect(self.loadingSpinner.stop)
 
-        self.imageUpscaler.started.connect(self.loadingSpinner.start)
-        self.imageUpscaler.finished.connect(self.loadingSpinner.stop)
+        self.imageUpscaleWorker.started.connect(self.loadingSpinner.start)
+        self.imageUpscaleWorker.finished.connect(self.loadingSpinner.stop)
 
         self.loadState()
 
@@ -279,63 +153,66 @@ class Application(QMainWindow):
 
         try:
             QMetaObject.invokeMethod(
-                self.imageGenerator,
+                self.imageGenerationWorker,
                 "generateImages",
                 Qt.ConnectionType.QueuedConnection,
                 Q_ARG(str, prompt),
             )
         except Exception as e:
             dialog = ErrorDialog(
-                e, "Do not panic and try different prompt", self
+                e, self.tr("Do not panic and try different prompt"), self
             )
             dialog.exec_()
-
-        self.setFocus()
 
     @pyqtSlot()
     def upscaleCurrentImage(self):
         try:
             QMetaObject.invokeMethod(
-                self.imageUpscaler,
+                self.imageUpscaleWorker,
                 "upscaleImage",
                 Qt.ConnectionType.QueuedConnection,
                 Q_ARG(QPixmap, self.images[self.currentImage].image),
             )
         except Exception as e:
-            dialog = ErrorDialog(e, "Upscaling failed!", self)
+            dialog = ErrorDialog(
+                e, self.tr("Upscaling failed!"), self
+            )
             dialog.exec_()
 
-    def closeEvent(self, _: QCloseEvent) -> None:
-        self.saveState()
-
-    def saveState(self):
-        dotenv.set_key(".env", "PREPEND", self.prepend.text())
-        dotenv.set_key(".env", "PROMPT", self.prompt.text())
-
-    def loadState(self):
-        self.prepend.setText(config["PREPEND"])
-        self.prompt.setText(config["PROMPT"])
-
-        def loadImage(i):
-            try:
-                self.images.append(
-                    ImageData(QPixmap(i), self.getMetadata(i), i)
-                )
-            except Exception as e:
-                logging.debug(f"Error while loading file \"{i}\":\n {e}")
-
-        apply_function_to_files(loadImage, self.outDir.as_posix())
-        self.images.sort(key=lambda x: -os.path.getctime(x.file))
-        self.setImage(0)
-        self.setFocus()
+    @pyqtSlot()
+    def backupCurrentImage(self):
+        try:
+            QMetaObject.invokeMethod(
+                self.imageBackupWorker,
+                "backupImage",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(QPixmap, self.images[self.currentImage].image),
+            )
+        except Exception as e:
+            dialog = ErrorDialog(
+                e, self.tr("Backup failed!"), self
+            )
+            dialog.exec_()
 
     @pyqtSlot()
-    def deleteImage(self):
+    def deleteCurrentImage(self):
+        os.remove(self.images[self.currentImage].file)
         self.images.pop(self.currentImage)
         self.setImage(self.currentImage)
 
+    @pyqtSlot()
+    def saveCurrentImage(self):
+        filePath, _ = QFileDialog.getSaveFileName(
+            self, self.tr("Save Image"),
+            "",
+            "Image Files (*.png, *.jpg, *.jpeg, *jfif)"
+        )
+        if not filePath:
+            return
+        self.images[self.currentImage].image.save(filePath)
+
     @pyqtSlot(str)
-    def changeMetadata(self, prompt):
+    def changeCurrentImageMetadata(self, prompt):
         if not prompt:
             return
 
@@ -346,14 +223,43 @@ class Application(QMainWindow):
             metadata[PIL.ExifTags.Base.XPComment] = prompt
             image.save(currentFile, exif=metadata)
 
-    def getMetadata(self, imgPath):
-        with Image.open(imgPath) as image:
-            return image.getexif().get(PIL.ExifTags.Base.XPComment)
+    def closeEvent(self, e: QCloseEvent):
+        self.saveState()
+        super().closeEvent(e)
+
+    def saveState(self):
+        dotenv.set_key(".env", "PREPEND", self.prepend.text())
+        dotenv.set_key(".env", "PROMPT", self.prompt.text())
+
+    def loadState(self):
+        self.prepend.setText(config["PREPEND"])
+        self.prompt.setText(config["PROMPT"])
+
+        def loadImage(filepath):
+            try:
+                with Image.open(filepath) as image:
+                    self.images.append(
+                        ImageData(
+                            QPixmap(filepath),
+                            image.getexif().get(PIL.ExifTags.Base.XPComment),
+                            filepath
+                        )
+                    )
+            except Exception as e:
+                logging.debug(
+                    f"Error while loading file \"{filepath}\":\n {e}"
+                )
+
+        apply_function_to_files(loadImage, self.outDir.as_posix())
+        self.images.sort(key=lambda x: -os.path.getctime(x.file))
+        self.setImage(0)
+        self.setFocus()
 
     @pyqtSlot(object)
     def receiveGeneratedImages(self, images):
         self.images = images + self.images
         self.setImage(0)
+        self.setFocus()
 
     def setImage(self, i):
         self.currentImage = i % len(self.images)
@@ -372,8 +278,8 @@ class Application(QMainWindow):
         self.setImage(self.currentImage)
 
     def mousePressEvent(self, e: QMouseEvent) -> None:
-        super().mousePressEvent(e)
         self.setFocus()
+        super().mousePressEvent(e)
 
     def keyPressEvent(self, e: QKeyEvent) -> None:
         match e.key():
