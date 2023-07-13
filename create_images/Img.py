@@ -84,22 +84,38 @@ class Img(QLabel):
         self.filePath = None
         self.initialPixmap = None
         self._index = None
+        self.originalImage = None
+        self.upscaledImage = None
 
         saveIcon = QIcon("res/icons/save.svg")
         copyIcon = QIcon("res/icons/copy.svg")
         upscaleIcon = QIcon("res/icons/upscale.svg")
+        originalIcon = QIcon("res/icons/original.svg")
         deleteIcon = QIcon("res/icons/delete.svg")
         backupIcon = QIcon("res/icons/backup.svg")
         editIcon = QIcon("res/icons/edit.svg")
+        nextIcon = QIcon("res/icons/next.svg")
+        prevIcon = QIcon("res/icons/prev.svg")
 
         self.saveAction = QAction(saveIcon, self.tr("Save"), self)
         self.saveAction.triggered.connect(self.saveImage)
 
         self.copyAction = QAction(copyIcon, self.tr("Copy"), self)
+        self.copyAction.setShortcut(QKeySequence.StandardKey.Copy)
         self.copyAction.triggered.connect(self.copyImage)
 
         self.upscaleAction = QAction(upscaleIcon, self.tr("Upscale"), self)
         self.upscaleAction.triggered.connect(self.upscaleImage)
+
+        self.showUpscaledAction = QAction(
+            upscaleIcon, self.tr("Show Upscaled"), self
+        )
+        self.showUpscaledAction.triggered.connect(self.swapToUpscaled)
+
+        self.showOriginalAction = QAction(
+            originalIcon, self.tr("Show Original"), self
+        )
+        self.showOriginalAction.triggered.connect(self.swapToOriginal)
 
         self.deleteAction = QAction(deleteIcon, self.tr("Delete"), self)
         self.deleteAction.triggered.connect(self.deleteImage)
@@ -113,16 +129,40 @@ class Img(QLabel):
         self.editPromptAction = QAction(editIcon, self.tr("Edit Prompt"), self)
         self.editPromptAction.triggered.connect(self.openPromptEditor)
 
+        self.nextPictureAction = QAction(nextIcon, self.tr("Next"), self)
+        nextShortcut = QShortcut(QKeySequence(Qt.Key_Right), self)
+        nextShortcut.activated.connect(self.nextPicture.emit)
+        self.nextPictureAction.setShortcut("Right")
+        self.nextPictureAction.triggered.connect(self.nextPicture.emit)
+
+        self.prevPictureAction = QAction(prevIcon, self.tr("Previous"), self)
+        prevShortcut = QShortcut(QKeySequence(Qt.Key_Left), self)
+        prevShortcut.activated.connect(self.prevPicture.emit)
+        self.prevPictureAction.setShortcut("Left")
+        self.prevPictureAction.triggered.connect(self.prevPicture.emit)
+
+        self.setFullScreenAction = QAction(
+            upscaleIcon, self.tr("Full Screen"), self
+        )
+        fullScreenShortcut = QShortcut(QKeySequence(Qt.Key_F), self)
+        fullScreenShortcut.activated.connect(self.setFullScreen.emit)
+        self.setFullScreenAction.setShortcut("F")
+        self.setFullScreenAction.triggered.connect(self.setFullScreen.emit)
+
         self.promptEdit = PromptEditor(self)
         self.promptEdit.notifyPromptChange.connect(self.editPrompt)
 
-        self.menu.addAction(self.saveAction)
-        self.menu.addAction(self.copyAction)
-        self.menu.addAction(self.upscaleAction)
-        self.menu.addAction(self.deleteAction)
-        self.menu.addAction(self.backupAction)
-        self.menu.addSeparator()
-        self.menu.addAction(self.editPromptAction)
+        self.menu.addAction(self.saveAction)           # 0
+        self.menu.addAction(self.copyAction)           # 1
+        self.menu.addAction(self.upscaleAction)        # 2
+        self.menu.addAction(self.deleteAction)         # 3
+        self.menu.addAction(self.backupAction)         # 4
+        self.menu.addSeparator()                       # _
+        self.menu.addAction(self.editPromptAction)     # 5
+        self.menu.addSeparator()                       # _
+        self.menu.addAction(self.nextPictureAction)    # 6
+        self.menu.addAction(self.prevPictureAction)    # 7
+        self.menu.addAction(self.setFullScreenAction)  # 8
 
         self.setStyle(DummyStyle())
 
@@ -131,6 +171,9 @@ class Img(QLabel):
     backupRequest = pyqtSignal()
     deleteRequest = pyqtSignal()
     saveRequest = pyqtSignal()
+    nextPicture = pyqtSignal()
+    prevPicture = pyqtSignal()
+    setFullScreen = pyqtSignal()
 
     def openPromptEditor(self):
         self.promptEdit.exec_(self.prompt)
@@ -139,11 +182,25 @@ class Img(QLabel):
         self.setPrompt(prompt)
         self.promptChangeRequest.emit(prompt)
 
+    def setUpscaled(self, image):
+        self.upscaledImage = image
+
+        if self.upscaledImage:
+            self.menu.removeAction(self.upscaleAction)
+            self.menu.insertAction(self.deleteAction, self.showUpscaledAction)
+        else:
+            self.menu.removeAction(self.showUpscaledAction)
+            self.menu.removeAction(self.showOriginalAction)
+            self.menu.insertAction(self.deleteAction, self.upscaleAction)
+
     def setPrompt(self, prompt):
         self.prompt = prompt
 
         if self.prompt:
-            self.menu.addAction(self.copyPromptAction)
+            self.menu.insertAction(
+                self.editPromptAction,
+                self.copyPromptAction
+            )
         else:
             self.menu.removeAction(self.copyPromptAction)
 
@@ -151,8 +208,9 @@ class Img(QLabel):
         self.filePath = path
 
     def setPixmap(self, pm: QPixmap) -> None:
-        self.updateMargins()
         super().setPixmap(pm)
+        self.updateMargins()
+        self.originalImage = pm
 
     def updateMargins(self):
         if self.pixmap() is None:
@@ -205,3 +263,17 @@ class Img(QLabel):
 
     def upscaleImage(self):
         self.upscaleRequest.emit()
+
+    def swapToUpscaled(self):
+        super().setPixmap(self.upscaledImage)
+        self.updateMargins()
+
+        self.menu.removeAction(self.showUpscaledAction)
+        self.menu.insertAction(self.deleteAction, self.showOriginalAction)
+
+    def swapToOriginal(self):
+        super().setPixmap(self.originalImage)
+        self.updateMargins()
+
+        self.menu.removeAction(self.showOriginalAction)
+        self.menu.insertAction(self.deleteAction, self.showUpscaledAction)

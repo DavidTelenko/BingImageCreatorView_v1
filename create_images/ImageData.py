@@ -8,3 +8,4 @@ class ImageData:
     image: QPixmap
     prompt: str
     file: str
+    upscaled: QPixmap = None

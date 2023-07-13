@@ -2,13 +2,14 @@ import logging
 import os
 import pathlib
 import BingImageCreator
+from PyQt5.QtCore import QEvent, QObject
 import dotenv
 from PyQt5.QtMultimedia import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 import qdarktheme
-from PIL import Image
+from PIL import Image, ImageQt
 import PIL.ExifTags
 from create_images.ImageBackupWorker import ImageBackupWorker
 from create_images.ImageGenerationWorker import ImageGenerationWorker
@@ -88,6 +89,15 @@ class Application(QMainWindow):
         self.imageLabel.saveRequest.connect(self.saveCurrentImage)
         self.imageLabel.upscaleRequest.connect(self.upscaleCurrentImage)
         self.imageLabel.backupRequest.connect(self.backupCurrentImage)
+        self.imageLabel.nextPicture.connect(
+            lambda: self.setImage(self.currentImage + 1)
+        )
+        self.imageLabel.prevPicture.connect(
+            lambda: self.setImage(self.currentImage - 1)
+        )
+        self.imageLabel.setFullScreen.connect(
+            lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen()
+        )
 
         search = QHBoxLayout()
         self.main = QVBoxLayout()
@@ -115,9 +125,6 @@ class Application(QMainWindow):
         dummy.setLayout(self.main)
         self.setCentralWidget(dummy)
 
-        self.acceptButton.setFocusProxy(self)
-        self.imageLabel.setFocusProxy(self)
-
         self.acceptButton.pressed.connect(self.generateImages)
         self.prompt.returnPressed.connect(self.generateImages)
 
@@ -135,6 +142,7 @@ class Application(QMainWindow):
         self.loadingSpinner.setInnerRadius(15)
         self.loadingSpinner.setRevolutionsPerSecond(1.5)
         self.loadingSpinner.setColor(Qt.white)
+        self.loadingSpinner.stopped.connect(self.imageLabel.setFocus)
 
         self.imageGenerationWorker.started.connect(self.loadingSpinner.start)
         self.imageGenerationWorker.finished.connect(self.loadingSpinner.stop)
@@ -143,11 +151,10 @@ class Application(QMainWindow):
         self.imageUpscaleWorker.finished.connect(self.loadingSpinner.stop)
 
         self.loadState()
+        self.imageLabel.setFocus()
 
     @pyqtSlot()
     def generateImages(self):
-        self.setFocus()
-
         if not self.prompt.text():
             return
 
@@ -225,10 +232,6 @@ class Application(QMainWindow):
             metadata[PIL.ExifTags.Base.XPComment] = prompt
             image.save(currentFile, exif=metadata)
 
-    def closeEvent(self, e: QCloseEvent):
-        self.saveState()
-        e.accept()
-
     def saveState(self):
         dotenv.set_key(".env", "PREPEND", self.prepend.text())
         dotenv.set_key(".env", "PROMPT", self.prompt.text())
@@ -239,12 +242,21 @@ class Application(QMainWindow):
 
         def loadImage(filepath):
             try:
+                upscaledPath = os.path.join(
+                    self.upscaledDir, os.path.basename(filepath)
+                )
+                upscaledImage = (
+                    None if not os.path.exists(upscaledPath)
+                    else QPixmap(upscaledPath)
+                )
+
                 with Image.open(filepath) as image:
                     self.images.append(
                         ImageData(
                             QPixmap(filepath),
                             image.getexif().get(PIL.ExifTags.Base.XPComment),
-                            filepath
+                            filepath,
+                            upscaledImage
                         )
                     )
             except Exception as e:
@@ -255,19 +267,18 @@ class Application(QMainWindow):
         apply_function_to_files(loadImage, self.outDir.as_posix())
         self.images.sort(key=lambda x: -os.path.getctime(x.file))
         self.setImage(0)
-        self.setFocus()
 
     @pyqtSlot(object)
     def receiveGeneratedImages(self, images):
         self.images = images + self.images
         self.setImage(0)
-        self.setFocus()
 
     def setImage(self, i):
         self.currentImage = i % len(self.images)
         self.imageLabel.setPixmap(self.images[self.currentImage].image)
         self.imageLabel.setPrompt(self.images[self.currentImage].prompt)
         self.imageLabel.setFilePath(self.images[self.currentImage].file)
+        self.imageLabel.setUpscaled(self.images[self.currentImage].upscaled)
 
     @pyqtSlot(object)
     def onUpscaled(self, image: Image):
@@ -278,19 +289,15 @@ class Application(QMainWindow):
             )
         )
         self.setImage(self.currentImage)
+        self.imageLabel.setUpscaled(ImageQt.toqpixmap(image))
+
+    def closeEvent(self, e: QCloseEvent):
+        self.saveState()
+        self.imageGenerationThread.terminate()
+        self.imageUpscaleThread.terminate()
+        self.imageBackupThread.terminate()
+        e.accept()
 
     def mousePressEvent(self, e: QMouseEvent) -> None:
-        self.setFocus()
+        self.imageLabel.setFocus()
         super().mousePressEvent(e)
-
-    def keyPressEvent(self, e: QKeyEvent) -> None:
-        match e.key():
-            case Qt.Key.Key_Right:
-                self.setImage(self.currentImage + 1)
-            case Qt.Key.Key_Left:
-                self.setImage(self.currentImage - 1)
-            case Qt.Key.Key_F:
-                if self.isFullScreen():
-                    self.showNormal()
-                else:
-                    self.showFullScreen()

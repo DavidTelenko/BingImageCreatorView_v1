@@ -26,15 +26,11 @@ class LoadingSpinnerWidget(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.rotate)
 
-        self.stopped.connect(self.stop)
-        self.started.connect(self.start)
-
         self.updateSize()
         self.updateTimer()
         self.hide()
 
     def paintEvent(self, event):
-        # self.updatePosition()
         painter = QPainter(self)
         painter.fillRect(self.rect(), Qt.transparent)
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -84,6 +80,8 @@ class LoadingSpinnerWidget(QWidget):
             self._timer.start()
             self._currentCounter = 0
 
+        self.started.emit()
+
     def stop(self):
         self._isSpinning = False
         self.hide()
@@ -94,6 +92,8 @@ class LoadingSpinnerWidget(QWidget):
         if self._timer.isActive():
             self._timer.stop()
             self._currentCounter = 0
+
+        self.stopped.emit()
 
     def rotate(self):
         self._currentCounter += 1
@@ -112,11 +112,11 @@ class LoadingSpinnerWidget(QWidget):
 
     def updatePosition(self):
         if self.parentWidget() and self._centerOnParent:
-            cX = self.parentWidget().geometry().center().x()
-            cY = self.parentWidget().geometry().center().y()
-            w = self.size().width()
-            h = self.size().height()
-            self.move(cX - w // 2, cY - h // 2)
+            w, h = self.size().width(), self.size().height()
+            self.move(
+                self.parentWidget().geometry().center().x() - w // 2,
+                self.parentWidget().geometry().center().y() - h // 2
+            )
 
     def lineCountDistanceFromPrimary(self, current):
         distance = self._currentCounter - current
