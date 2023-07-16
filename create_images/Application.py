@@ -2,6 +2,7 @@ import logging
 import os
 import pathlib
 import BingImageCreator
+from PyQt5 import QtCore
 from PyQt5.QtCore import QEvent, QObject
 import dotenv
 from PyQt5.QtMultimedia import *
@@ -20,7 +21,7 @@ from create_images.Utils import apply_function_to_files
 from create_images.ErrorDialog import ErrorDialog
 from create_images.ImageData import ImageData
 import cv2
-
+from win10toast import ToastNotifier
 
 config = dotenv.dotenv_values(".env")
 
@@ -34,6 +35,8 @@ class Application(QMainWindow):
 
         self.images = []
         self.currentImage = 0
+        self.notifyWhenGenerated = (config["NOTIFY"] == "True")
+        self.toast = ToastNotifier()
 
         self.setStyleSheet(qdarktheme.load_stylesheet("dark"))
         self.setWindowTitle(self.tr("Bing Image Creator"))
@@ -147,8 +150,10 @@ class Application(QMainWindow):
         self.imageGenerationWorker.started.connect(self.loadingSpinner.start)
         self.imageGenerationWorker.finished.connect(self.loadingSpinner.stop)
 
-        self.imageUpscaleWorker.started.connect(self.loadingSpinner.start)
-        self.imageUpscaleWorker.finished.connect(self.loadingSpinner.stop)
+        # self.imageUpscaleWorker.started.connect(self.loadingSpinner.start)
+        # self.imageUpscaleWorker.finished.connect(self.loadingSpinner.stop)
+
+        self.setWindowFlags(Qt.Window)
 
         self.loadState()
         self.imageLabel.setFocus()
@@ -272,6 +277,13 @@ class Application(QMainWindow):
     def receiveGeneratedImages(self, images):
         self.images = images + self.images
         self.setImage(0)
+        if self.notifyWhenGenerated and not self.isActiveWindow():
+            self.toast.show_toast(
+                "Generated",
+                f"{len(images)} images successfully generated",
+                duration=5,
+                threaded=True,
+            )
 
     def setImage(self, i):
         self.currentImage = i % len(self.images)

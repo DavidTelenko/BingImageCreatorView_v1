@@ -36,6 +36,9 @@ class ImageGenerationWorker(QObject):
     @pyqtSlot(str)
     def generateImages(self, prompt):
         self.started.emit()
+        # time.sleep(2)
+        # self.finished.emit()
+        # return
         try:
             imagesLinks = self.generator.get_images(prompt)
             generatedImages = []

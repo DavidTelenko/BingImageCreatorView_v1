@@ -98,10 +98,15 @@ class Img(QLabel):
         prevIcon = QIcon("res/icons/prev.svg")
 
         self.saveAction = QAction(saveIcon, self.tr("Save"), self)
+        self.saveAction.setShortcut("Ctrl+S")
+        saveShortcut = QShortcut("Ctrl+S", self)
+        saveShortcut.activated.connect(self.saveImage)
         self.saveAction.triggered.connect(self.saveImage)
 
         self.copyAction = QAction(copyIcon, self.tr("Copy"), self)
-        self.copyAction.setShortcut(QKeySequence.StandardKey.Copy)
+        self.copyAction.setShortcut("Ctrl+C")
+        copyShortcut = QShortcut("Ctrl+C", self)
+        copyShortcut.activated.connect(self.copyImage)
         self.copyAction.triggered.connect(self.copyImage)
 
         self.upscaleAction = QAction(upscaleIcon, self.tr("Upscale"), self)
@@ -118,12 +123,18 @@ class Img(QLabel):
         self.showOriginalAction.triggered.connect(self.swapToOriginal)
 
         self.deleteAction = QAction(deleteIcon, self.tr("Delete"), self)
+        self.deleteAction.setShortcut("Shift+Del")
+        deleteShortcut = QShortcut("Shift+Del", self)
+        deleteShortcut.activated.connect(self.deleteImage)
         self.deleteAction.triggered.connect(self.deleteImage)
 
         self.backupAction = QAction(backupIcon, self.tr("Backup"), self)
         self.backupAction.triggered.connect(self.backupRequest.emit)
 
         self.copyPromptAction = QAction(copyIcon, self.tr("Copy Prompt"), self)
+        self.copyPromptAction.setShortcut("Ctrl+Shift+C")
+        copyPromptShortcut = QShortcut("Ctrl+Shift+C", self)
+        copyPromptShortcut.activated.connect(self.copyPrompt)
         self.copyPromptAction.triggered.connect(self.copyPrompt)
 
         self.editPromptAction = QAction(editIcon, self.tr("Edit Prompt"), self)
